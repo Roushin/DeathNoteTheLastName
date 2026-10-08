@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Death Note: Names in the Dark (Online)</title>
+    <!-- PeerJS for P2P Online Multiplayer -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0d0d0d;
+            --panel-bg: #161616;
+            --border-color: #333333;
+            --accent-red: #8b0000;
+            --text-color: #e0e0e0;
+            --text-muted: #888888;
+        }
+
+        body {
+            font-family: 'Courier Prime', Courier, monospace, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container { max-width: 800px; width: 100%; }
+
+        header {
+            text-align: center;
+            border-bottom: 2px solid var(--accent-red);
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+
+        h1 { margin: 0; font-size: 1.8rem; letter-spacing: 2px; color: #fff; text-transform: uppercase; }
+        p.subtitle { color: var(--text-muted); font-size: 0.9rem; margin-top: 5px; }
+
+        .card {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        }
+
+        .btn {
+            background-color: #222;
+            color: #fff;
+            border: 1px solid #555;
+            padding: 10px 18px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-weight: bold;
+            text-transform: uppercase;
+            font-size: 0.85rem;
+            margin: 5px 0;
+        }
+        .btn:hover { background-color: #444; border-color: #888; }
+        .btn-danger { background-color: var(--accent-red); border-color: #b22222; }
+
+        input, select {
+            background-color: #000;
+            border: 1px solid #444;
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-family: inherit;
+            margin: 5px 0;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        .game-stats {
+            display: flex;
+            justify-content: space-between;
+            background: #111;
+            padding: 10px 15px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            font-size: 0.9rem;
+            border: 1px solid #222;
+        }
+
+        .player-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .player-card-box {
+            background: #1c1c1c;
+            border: 1px solid #333;
+            padding: 12px;
+            border-radius: 6px;
+            text-align: center;
+        }
+        .player-card-box.active-turn { border-color: #fff; box-shadow: 0 0 8px rgba(255,255,255,0.2); }
+        .player-card-box.eliminated { opacity: 0.4; border-color: var(--accent-red); }
+
+        .card-display {
+            background: #fff;
+            color: #000;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 10px;
+            text-align: left;
+            position: relative;
+            border: 2px solid #000;
+            display: inline-block;
+            width: 200px;
+            cursor: pointer;
+        }
+        .card-display .card-value { position: absolute; top: 10px; right: 15px; font-size: 1.5rem; font-weight: bold; }
+        .card-display .card-name { font-weight: bold; font-size: 1.1rem; text-transform: uppercase; }
+        .card-display .card-effect { font-size: 0.8rem; margin-top: 10px; border-top: 1px dashed #ccc; padding-top: 8px; }
+
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); display: flex; justify-content: center; align-items: center; z-index: 100;
+        }
+        .modal-content { background: var(--panel-bg); border: 1px solid #555; padding: 25px; border-radius: 8px; max-width: 450px; width: 90%; text-align: center; }
+
+        .hidden { display: none !important; }
+        .log-box { background: #0a0a0a; border: 1px solid #222; padding: 10px; height: 100px; overflow-y: auto; font-size: 0.75rem; text-align: left; color: #aaa; margin-top: 15px; }
+        code-box { background: #111; padding: 5px 10px; border: 1px dashed #555; display: inline-block; color: #4af626; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>Death Note: Names in the Dark</h1>
+        <p class="subtitle">Online P2P Multiplayer Edition</p>
+    </header>
+
+    <!-- LOBBY SELECTION SCREEN -->
+    <div id="lobby-screen" class="card">
+        <h2>Multiplayer Lobby</h2>
+        <div style="margin-bottom: 20px;">
+            <h3>Create a Room (Host)</h3>
+            <input type="text" id="host-name" placeholder="Your Name (e.g., Light)" value="Light">
+            <button class="btn btn-danger" onclick="hostGame()">Create Room</button>
+        </div>
+        <hr style="border-color: #333;">
+        <div style="margin-top: 20px;">
+            <h3>Join a Room</h3>
+            <input type="text" id="join-name" placeholder="Your Name (e.g., L)" value="L">
+            <input type="text" id="room-code-input" placeholder="Paste Host Room ID Here">
+            <button class="btn" onclick="joinGame()">Join Room</button>
+        </div>
+    </div>
+
+    <!-- WAITING ROOM (HOST CONFIG) -->
+    <div id="waiting-screen" class="card hidden">
+        <h2>Waiting for Players...</h2>
+        <p>Give your friends this Room ID: <br><br><code-box id="display-room-id">Generating...</code-box></p>
+        <h3>Connected Players:</h3>
+        <ul id="lobby-player-list" style="list-style: none; padding: 0;"></ul>
+        <button id="start-game-btn" class="btn btn-danger hidden" onclick="startOnlineGame()">Start Match</button>
+    </div>
+
+    <!-- GAME BOARD SCREEN -->
+    <div id="game-screen" class="card hidden">
+        <div class="game-stats">
+            <div>Deck Remaining: <span id="deck-count">13</span> cards</div>
+            <div>Turn: <span id="current-player-name">Player 1</span></div>
+        </div>
+
+        <h3>Players</h3>
+        <div class="player-list" id="player-list-container"></div>
+
+        <div class="card" id="turn-action-panel">
+            <h3>Your Turn</h3>
+            <p id="turn-instructions">Waiting for active player...</p>
+            <button class="btn hidden" id="draw-btn" onclick="drawCard()">Draw Card</button>
+            <div id="hand-container" class="hidden">
+                <p>Choose 1 of your cards to play:</p>
+                <div id="card-options" style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap;"></div>
+            </div>
+        </div>
+
+        <h3>Event Log</h3>
+        <div class="log-box" id="game-log"><div>Connected to lobby.</div></div>
+    </div>
+</div>
+
+<!-- MODAL OVERLAY -->
+<div id="action-modal" class="modal-overlay hidden">
+    <div class="modal-content">
+        <h3 id="modal-title">Action Resolution</h3>
+        <p id="modal-desc">Select target:</p>
+        <div id="modal-body"></div>
+        <br>
+        <button class="btn" id="modal-confirm-btn">Confirm</button>
+    </div>
+</div>
+
+<script>
+    const MASTER_DECK_TEMPLATE = [
+        { value: 8, name: "Kira / Light Yagami", faction: "Kira", effect: "If an investigator forces you to reveal or discard this card, you are eliminated." },
+        { value: 7, name: "Misa Amane / Second Kira", faction: "Kira", effect: "Choose another player. They must reveal allegiance or discard a card." },
+        { value: 6, name: "L / Lawliet", faction: "Task Force", effect: "Secretly inspect another player's hand." },
+        { value: 6, name: "L / Lawliet", faction: "Task Force", effect: "Secretly inspect another player's hand." },
+        { value: 5, name: "Soichiro Yagami", faction: "Task Force", effect: "Compare hands with a player; lower value is eliminated." },
+        { value: 5, name: "Soichiro Yagami", faction: "Task Force", effect: "Compare hands with a player; lower value is eliminated." },
+        { value: 4, name: "Rem / Ryuk", faction: "Kira", effect: "Choose a player. Until your next turn, effects from that player cannot target you." },
+        { value: 4, name: "Rem / Ryuk", faction: "Kira", effect: "Choose a player. Until your next turn, effects from that player cannot target you." },
+        { value: 3, name: "Task Force Investigator", faction: "Task Force", effect: "Guess another player's card (except Value 8). Correct guess eliminates them." },
+        { value: 3, name: "Task Force Investigator", faction: "Task Force", effect: "Guess another player's card (except Value 8). Correct guess eliminates them." },
+        { value: 3, name: "Task Force Investigator", faction: "Task Force", effect: "Guess another player's card (except Value 8). Correct guess eliminates them." },
+        { value: 2, name: "Matsuda", faction: "Task Force", effect: "Either look at a random card from the deck, or swap your hand with another player." },
+        { value: 2, name: "Matsuda", faction: "Task Force", effect: "Either look at a random card from the deck, or swap your hand with another player." },
+        { value: 1, name: "Anonymous Informant", faction: "Task Force", effect: "Name a specific card value and choose a player. If they hold it, they are eliminated." },
+        { value: 1, name: "Anonymous Informant", faction: "Task Force", effect: "Name a specific card value and choose a player. If they hold it, they are eliminated." },
+        { value: 1, name: "Anonymous Informant", faction: "Task Force", effect: "Name a specific card value and choose a player. If they hold it, they are eliminated." }
+    ];
+
+    let peer = null;
+    let conn = null; // Connection to host (if client)
+    let connections = []; // Connections to clients (if host)
+    let isHost = false;
+    let myName = "";
+    let myId = "";
+    
+    // Game State variables
+    let gameState = {
+        players: [],
+        deck: [],
+        currentPlayerIndex: 0
+    };
+
+    function logEvent(msg) {
+        const logBox = document.getElementById("game-log");
+        if(logBox) {
+            logBox.innerHTML += `<div>> ${msg}</div>`;
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+    }
+
+    function hostGame() {
+        myName = document.getElementById("host-name").value.trim() || "Host";
+        isHost = true;
+        peer = new Peer();
+
+        peer.on('open', (id) => {
+            myId = id;
+            document.getElementById("lobby-screen").classList.add("hidden");
+            document.getElementById("waiting-screen").classList.remove("hidden");
+            document.getElementById("display-room-id").innerText = id;
+
+            gameState.players.push({ id: id, name: myName, hand: [], isEliminated: false });
+            updateLobbyUI();
+            document.getElementById("start-game-btn").classList.remove("hidden");
+        });
+
+        peer.on('connection', (c) => {
+            connections.push(c);
+            setupClientConnection(c);
+        });
+    }
+
+    function joinGame() {
+        myName = document.getElementById("join-name").value.trim() || "Guest";
+        const hostId = document.getElementById("room-code-input").value.trim();
+        if (!hostId) { alert("Please enter a valid Room ID"); return; }
+
+        isHost = false;
+        peer = new Peer();
+
+        peer.on('open', (id) => {
+            myId = id;
+            conn = peer.connect(hostId);
+            
+            conn.on('open', () => {
+                document.getElementById("lobby-screen").classList.add("hidden");
+                document.getElementById("waiting-screen").classList.remove("hidden");
+                document.getElementById("display-room-id").innerText = hostId;
+                // Send join request
+                conn.send({ type: 'JOIN', name: myName, id: myId });
+            });
+
+            conn.on('data', (data) => handleIncomingData(data));
+        });
+    }
+
+    function setupClientConnection(c) {
+        c.on('data', (data) => {
+            if (data.type === 'JOIN') {
+                gameState.players.push({ id: data.id, name: data.name, hand: [], isEliminated: false });
+                updateLobbyUI();
+                broadcast({ type: 'LOBBY_UPDATE', players: gameState.players });
+            }
+        });
+    }
+
+    function updateLobbyUI() {
+        const list = document.getElementById("lobby-player-list");
+        list.innerHTML = "";
+        gameState.players.forEach(p => {
+            list.innerHTML += `<li>- ${p.name}</li>`;
+        });
+    }
+
+    function broadcast(data) {
+        connections.forEach(c => c.send(data));
+    }
+
+    function handleIncomingData(data) {
+        if (data.type === 'LOBBY_UPDATE') {
+            gameState.players = data.players;
+            updateLobbyUI();
+            document.getElementById("waiting-screen").classList.remove("hidden");
+        } else if (data.type === 'START_GAME') {
+            gameState = data.gameState;
+            document.getElementById("waiting-screen").classList.add("hidden");
+            document.getElementById("game-screen").classList.remove("hidden");
+            renderGame();
+        } else if (data.type === 'STATE_UPDATE') {
+            gameState = data.gameState;
+            renderGame();
+        }
+    }
+
+    function startOnlineGame() {
+        if (!isHost) return;
+        // Initialize Deck & Deal
+        gameState.deck = [...MASTER_DECK_TEMPLATE].sort(() => Math.random() - 0.5);
+        gameState.players.forEach(p => {
+            p.hand.push(gameState.deck.pop());
+        });
+        gameState.currentPlayerIndex = 0;
+
+        document.getElementById("waiting-screen").classList.add("hidden");
+        document.getElementById("game-screen").classList.remove("hidden");
+
+        broadcast({ type: 'START_GAME', gameState: gameState });
+        renderGame();
+    }
+
+    function renderGame() {
+        document.getElementById("deck-count").innerText = gameState.deck.length;
+        const activePlayer = gameState.players[gameState.currentPlayerIndex];
+        document.getElementById("current-player-name").innerText = activePlayer.name;
+
+        const listContainer = document.getElementById("player-list-container");
+        listContainer.innerHTML = "";
+        gameState.players.forEach((p, idx) => {
+            listContainer.innerHTML += `
+                <div class="player-card-box ${idx === gameState.currentPlayerIndex ? 'active-turn' : ''} ${p.isEliminated ? 'eliminated' : ''}">
+                    <strong>${p.name}</strong><br><small>${p.isEliminated ? 'ELIMINATED' : 'Alive'}</small>
+                </div>
+            `;
+        });
+
+        // Check if it's my turn
+        const myPlayer = gameState.players.find(p => p.id === myId);
+        const isMyTurn = activePlayer.id === myId && !myPlayer.isEliminated;
+
+        if (isMyTurn) {
+            document.getElementById("turn-instructions").innerText = "It's your turn! Draw a card.";
+            if (myPlayer.hand.length === 1) {
+                document.getElementById("draw-btn").classList.remove("hidden");
+            } else {
+                document.getElementById("draw-btn").classList.add("hidden");
+                showMyHand(myPlayer);
+            }
+        } else {
+            document.getElementById("turn-instructions").innerText = `Waiting for ${activePlayer.name}'s turn...`;
+            document.getElementById("draw-btn").classList.add("hidden");
+            document.getElementById("hand-container").classList.add("hidden");
+        }
+    }
+
+    function drawCard() {
+        if (gameState.deck.length === 0) {
+            alert("Deck empty!");
+            return;
+        }
+        const myPlayer = gameState.players.find(p => p.id === myId);
+        myPlayer.hand.push(gameState.deck.pop());
+
+        document.getElementById("draw-btn").classList.add("hidden");
+        showMyHand(myPlayer);
+        syncState();
+    }
+
+    function showMyHand(myPlayer) {
+        const container = document.getElementById("card-options");
+        container.innerHTML = "";
+        document.getElementById("hand-container").classList.remove("hidden");
+
+        myPlayer.hand.forEach((card, cardIdx) => {
+            const el = document.createElement("div");
+            el.className = "card-display";
+            el.innerHTML = `
+                <div class="card-value">[${card.value}]</div>
+                <div class="card-name">${card.name}</div>
+                <div class="card-effect">${card.effect}</div>
+            `;
+            el.onclick = () => playCard(cardIdx);
+            container.appendChild(el);
+        });
+    }
+
+    function playCard(cardIdx) {
+        const myPlayer = gameState.players.find(p => p.id === myId);
+        const playedCard = myPlayer.hand.splice(cardIdx, 1)[0];
+        logEvent(`You played [${playedCard.value}] ${playedCard.name}`);
+
+        // Advance turn
+        gameState.currentPlayerIndex = (gameState.currentPlayerIndex + 1) % gameState.players.length;
+        syncState();
+    }
+
+    function syncState() {
+        if (isHost) {
+            broadcast({ type: 'STATE_UPDATE', gameState: gameState });
+            renderGame();
+        } else {
+            // Send action back to host if needed, or host handles rules loop
+        }
+    }
+</script>
+
+</body>
+</html>

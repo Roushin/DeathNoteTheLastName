@@ -120,12 +120,6 @@
         .card-display .card-name { font-weight: bold; font-size: 1.1rem; text-transform: uppercase; }
         .card-display .card-effect { font-size: 0.8rem; margin-top: 10px; border-top: 1px dashed #ccc; padding-top: 8px; }
 
-        .modal-overlay {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.85); display: flex; justify-content: center; align-items: center; z-index: 100;
-        }
-        .modal-content { background: var(--panel-bg); border: 1px solid #555; padding: 25px; border-radius: 8px; max-width: 450px; width: 90%; text-align: center; }
-
         .hidden { display: none !important; }
         .log-box { background: #0a0a0a; border: 1px solid #222; padding: 10px; height: 100px; overflow-y: auto; font-size: 0.75rem; text-align: left; color: #aaa; margin-top: 15px; }
         code-box { background: #111; padding: 5px 10px; border: 1px dashed #555; display: inline-block; color: #4af626; font-weight: bold; }
@@ -190,17 +184,6 @@
     </div>
 </div>
 
-<!-- MODAL OVERLAY -->
-<div id="action-modal" class="modal-overlay hidden">
-    <div class="modal-content">
-        <h3 id="modal-title">Action Resolution</h3>
-        <p id="modal-desc">Select target:</p>
-        <div id="modal-body"></div>
-        <br>
-        <button class="btn" id="modal-confirm-btn">Confirm</button>
-    </div>
-</div>
-
 <script>
     const MASTER_DECK_TEMPLATE = [
         { value: 8, name: "Kira / Light Yagami", faction: "Kira", effect: "If an investigator forces you to reveal or discard this card, you are eliminated." },
@@ -222,13 +205,12 @@
     ];
 
     let peer = null;
-    let conn = null; // Connection to host (if client)
-    let connections = []; // Connections to clients (if host)
+    let hostConnection = null; // Client connection to host
+    let clientConnections = {}; // Host connections keyed by peer ID
     let isHost = false;
     let myName = "";
     let myId = "";
     
-    // Game State variables
     let gameState = {
         players: [],
         deck: [],
@@ -260,8 +242,9 @@
         });
 
         peer.on('connection', (c) => {
-            connections.push(c);
-            setupClientConnection(c);
+            clientConnections[c.peer] = c;
+            c.on('data', (data) => handleHostData(data, c.peer));
+            c.on('close', () => { delete clientConnections[c.peer]; });
         });
     }
 
@@ -275,28 +258,42 @@
 
         peer.on('open', (id) => {
             myId = id;
-            conn = peer.connect(hostId);
+            hostConnection = peer.connect(hostId);
             
-            conn.on('open', () => {
+            hostConnection.on('open', () => {
                 document.getElementById("lobby-screen").classList.add("hidden");
                 document.getElementById("waiting-screen").classList.remove("hidden");
                 document.getElementById("display-room-id").innerText = hostId;
-                // Send join request
-                conn.send({ type: 'JOIN', name: myName, id: myId });
+                hostConnection.send({ type: 'JOIN', name: myName, id: myId });
             });
 
-            conn.on('data', (data) => handleIncomingData(data));
+            hostConnection.on('data', (data) => handleClientData(data));
         });
     }
 
-    function setupClientConnection(c) {
-        c.on('data', (data) => {
-            if (data.type === 'JOIN') {
+    function handleHostData(data, peerId) {
+        if (data.type === 'JOIN') {
+            // Prevent duplicate joins
+            if(!gameState.players.some(p => p.id === data.id)) {
                 gameState.players.push({ id: data.id, name: data.name, hand: [], isEliminated: false });
-                updateLobbyUI();
-                broadcast({ type: 'LOBBY_UPDATE', players: gameState.players });
             }
-        });
+            updateLobbyUI();
+            broadcast({ type: 'LOBBY_UPDATE', players: gameState.players });
+        } else if (data.type === 'ACTION_PLAY_CARD') {
+            processPlayerAction(data.playerIndex, data.cardIndex);
+        }
+    }
+
+    function handleClientData(data) {
+        if (data.type === 'LOBBY_UPDATE') {
+            gameState.players = data.players;
+            updateLobbyUI();
+        } else if (data.type === 'START_GAME' || data.type === 'STATE_UPDATE') {
+            gameState = data.gameState;
+            document.getElementById("waiting-screen").classList.add("hidden");
+            document.getElementById("game-screen").classList.remove("hidden");
+            renderGame();
+        }
     }
 
     function updateLobbyUI() {
@@ -308,65 +305,60 @@
     }
 
     function broadcast(data) {
-        connections.forEach(c => c.send(data));
-    }
-
-    function handleIncomingData(data) {
-        if (data.type === 'LOBBY_UPDATE') {
-            gameState.players = data.players;
-            updateLobbyUI();
-            document.getElementById("waiting-screen").classList.remove("hidden");
-        } else if (data.type === 'START_GAME') {
-            gameState = data.gameState;
-            document.getElementById("waiting-screen").classList.add("hidden");
-            document.getElementById("game-screen").classList.remove("hidden");
-            renderGame();
-        } else if (data.type === 'STATE_UPDATE') {
-            gameState = data.gameState;
-            renderGame();
-        }
+        Object.values(clientConnections).forEach(c => c.send(data));
     }
 
     function startOnlineGame() {
         if (!isHost) return;
-        // Initialize Deck & Deal
+        
+        // Shuffle deck and deal 1 card to each player initially[cite: 5]
         gameState.deck = [...MASTER_DECK_TEMPLATE].sort(() => Math.random() - 0.5);
         gameState.players.forEach(p => {
-            p.hand.push(gameState.deck.pop());
+            p.hand = [gameState.deck.pop()];
+            p.isEliminated = false;
         });
         gameState.currentPlayerIndex = 0;
 
         document.getElementById("waiting-screen").classList.add("hidden");
         document.getElementById("game-screen").classList.remove("hidden");
 
-        broadcast({ type: 'START_GAME', gameState: gameState });
-        renderGame();
+        syncAndRender();
+        logEvent("Match started. Cards dealt.");
+    }
+
+    function syncAndRender() {
+        if (isHost) {
+            broadcast({ type: 'STATE_UPDATE', gameState: gameState });
+            renderGame();
+        }
     }
 
     function renderGame() {
         document.getElementById("deck-count").innerText = gameState.deck.length;
         const activePlayer = gameState.players[gameState.currentPlayerIndex];
-        document.getElementById("current-player-name").innerText = activePlayer.name;
+        document.getElementById("current-player-name").innerText = activePlayer ? activePlayer.name : "None";
 
         const listContainer = document.getElementById("player-list-container");
         listContainer.innerHTML = "";
         gameState.players.forEach((p, idx) => {
             listContainer.innerHTML += `
                 <div class="player-card-box ${idx === gameState.currentPlayerIndex ? 'active-turn' : ''} ${p.isEliminated ? 'eliminated' : ''}">
-                    <strong>${p.name}</strong><br><small>${p.isEliminated ? 'ELIMINATED' : 'Alive'}</small>
+                    <strong>${p.name}</strong><br><small>${p.isEliminated ? 'ELIMINATED' : (p.hand.length > 1 ? 'Has 2 Cards' : 'Has 1 Card')}</small>
                 </div>
             `;
         });
 
-        // Check if it's my turn
+        if (!activePlayer) return;
+        const isMyTurn = activePlayer.id === myId && !activePlayer.isEliminated;
         const myPlayer = gameState.players.find(p => p.id === myId);
-        const isMyTurn = activePlayer.id === myId && !myPlayer.isEliminated;
 
-        if (isMyTurn) {
-            document.getElementById("turn-instructions").innerText = "It's your turn! Draw a card.";
+        if (isMyTurn && myPlayer) {
             if (myPlayer.hand.length === 1) {
+                document.getElementById("turn-instructions").innerText = "It's your turn! Draw a card to begin.";
                 document.getElementById("draw-btn").classList.remove("hidden");
+                document.getElementById("hand-container").classList.add("hidden");
             } else {
+                document.getElementById("turn-instructions").innerText = "Choose 1 card from your hand to play:";
                 document.getElementById("draw-btn").classList.add("hidden");
                 showMyHand(myPlayer);
             }
@@ -379,15 +371,22 @@
 
     function drawCard() {
         if (gameState.deck.length === 0) {
-            alert("Deck empty!");
+            alert("The deck is empty!");
             return;
         }
-        const myPlayer = gameState.players.find(p => p.id === myId);
-        myPlayer.hand.push(gameState.deck.pop());
 
-        document.getElementById("draw-btn").classList.add("hidden");
-        showMyHand(myPlayer);
-        syncState();
+        const myPlayer = gameState.players.find(p => p.id === myId);
+        if (myPlayer.hand.length >= 2) return;
+
+        myPlayer.hand.push(gameState.deck.pop());
+        
+        if (isHost) {
+            syncAndRender();
+        } else {
+            // Send update to host or handle locally then sync
+            hostConnection.send({ type: 'STATE_UPDATE', gameState: gameState });
+            renderGame();
+        }
     }
 
     function showMyHand(myPlayer) {
@@ -403,28 +402,32 @@
                 <div class="card-name">${card.name}</div>
                 <div class="card-effect">${card.effect}</div>
             `;
-            el.onclick = () => playCard(cardIdx);
+            el.onclick = () => selectCardToPlay(cardIdx);
             container.appendChild(el);
         });
     }
 
-    function playCard(cardIdx) {
-        const myPlayer = gameState.players.find(p => p.id === myId);
-        const playedCard = myPlayer.hand.splice(cardIdx, 1)[0];
-        logEvent(`You played [${playedCard.value}] ${playedCard.name}`);
-
-        // Advance turn
-        gameState.currentPlayerIndex = (gameState.currentPlayerIndex + 1) % gameState.players.length;
-        syncState();
+    function selectCardToPlay(cardIdx) {
+        const myPlayerIndex = gameState.players.findIndex(p => p.id === myId);
+        
+        if (isHost) {
+            processPlayerAction(myPlayerIndex, cardIdx);
+        } else {
+            hostConnection.send({ type: 'ACTION_PLAY_CARD', playerIndex: myPlayerIndex, cardIndex: cardIdx });
+        }
     }
 
-    function syncState() {
-        if (isHost) {
-            broadcast({ type: 'STATE_UPDATE', gameState: gameState });
-            renderGame();
-        } else {
-            // Send action back to host if needed, or host handles rules loop
-        }
+    function processPlayerAction(playerIndex, cardIdx) {
+        const player = gameState.players[playerIndex];
+        const playedCard = player.hand.splice(cardIdx, 1)[0];
+        logEvent(`${player.name} played [Value ${playedCard.value}] ${playedCard.name}`);
+
+        // Advance to next live player
+        do {
+            gameState.currentPlayerIndex = (gameState.currentPlayerIndex + 1) % gameState.players.length;
+        } while (gameState.players[gameState.currentPlayerIndex].isEliminated);
+
+        syncAndRender();
     }
 </script>
 

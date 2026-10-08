@@ -120,6 +120,12 @@
         .card-display .card-name { font-weight: bold; font-size: 1.1rem; text-transform: uppercase; }
         .card-display .card-effect { font-size: 0.8rem; margin-top: 10px; border-top: 1px dashed #ccc; padding-top: 8px; }
 
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); display: flex; justify-content: center; align-items: center; z-index: 100;
+        }
+        .modal-content { background: var(--panel-bg); border: 1px solid #555; padding: 25px; border-radius: 8px; max-width: 450px; width: 90%; text-align: center; }
+
         .hidden { display: none !important; }
         .log-box { background: #0a0a0a; border: 1px solid #222; padding: 10px; height: 100px; overflow-y: auto; font-size: 0.75rem; text-align: left; color: #aaa; margin-top: 15px; }
         code-box { background: #111; padding: 5px 10px; border: 1px dashed #555; display: inline-block; color: #4af626; font-weight: bold; }
@@ -150,7 +156,7 @@
         </div>
     </div>
 
-    <!-- WAITING ROOM (HOST CONFIG) -->
+    <!-- WAITING ROOM -->
     <div id="waiting-screen" class="card hidden">
         <h2>Waiting for Players...</h2>
         <p>Give your friends this Room ID: <br><br><code-box id="display-room-id">Generating...</code-box></p>
@@ -184,6 +190,17 @@
     </div>
 </div>
 
+<!-- ACTION & TARGETING MODAL -->
+<div id="action-modal" class="modal-overlay hidden">
+    <div class="modal-content">
+        <h3 id="modal-title">Action Resolution</h3>
+        <p id="modal-desc">Select target or parameters:</p>
+        <div id="modal-body"></div>
+        <br>
+        <button class="btn" id="modal-confirm-btn">Confirm</button>
+    </div>
+</div>
+
 <script>
     const MASTER_DECK_TEMPLATE = [
         { value: 8, name: "Kira / Light Yagami", faction: "Kira", effect: "If an investigator forces you to reveal or discard this card, you are eliminated." },
@@ -205,8 +222,8 @@
     ];
 
     let peer = null;
-    let hostConnection = null; // Client connection to host
-    let clientConnections = {}; // Host connections keyed by peer ID
+    let hostConnection = null;
+    let clientConnections = {};
     let isHost = false;
     let myName = "";
     let myId = "";
@@ -273,14 +290,15 @@
 
     function handleHostData(data, peerId) {
         if (data.type === 'JOIN') {
-            // Prevent duplicate joins
             if(!gameState.players.some(p => p.id === data.id)) {
                 gameState.players.push({ id: data.id, name: data.name, hand: [], isEliminated: false });
             }
             updateLobbyUI();
             broadcast({ type: 'LOBBY_UPDATE', players: gameState.players });
-        } else if (data.type === 'ACTION_PLAY_CARD') {
-            processPlayerAction(data.playerIndex, data.cardIndex);
+        } else if (data.type === 'UPDATE_STATE') {
+            gameState = data.gameState;
+            broadcast({ type: 'STATE_UPDATE', gameState: gameState });
+            renderGame();
         }
     }
 
@@ -311,7 +329,6 @@
     function startOnlineGame() {
         if (!isHost) return;
         
-        // Shuffle deck and deal 1 card to each player initially[cite: 5]
         gameState.deck = [...MASTER_DECK_TEMPLATE].sort(() => Math.random() - 0.5);
         gameState.players.forEach(p => {
             p.hand = [gameState.deck.pop()];
@@ -330,6 +347,8 @@
         if (isHost) {
             broadcast({ type: 'STATE_UPDATE', gameState: gameState });
             renderGame();
+        } else {
+            hostConnection.send({ type: 'UPDATE_STATE', gameState: gameState });
         }
     }
 
@@ -379,14 +398,7 @@
         if (myPlayer.hand.length >= 2) return;
 
         myPlayer.hand.push(gameState.deck.pop());
-        
-        if (isHost) {
-            syncAndRender();
-        } else {
-            // Send update to host or handle locally then sync
-            hostConnection.send({ type: 'STATE_UPDATE', gameState: gameState });
-            renderGame();
-        }
+        syncAndRender();
     }
 
     function showMyHand(myPlayer) {
@@ -402,25 +414,149 @@
                 <div class="card-name">${card.name}</div>
                 <div class="card-effect">${card.effect}</div>
             `;
-            el.onclick = () => selectCardToPlay(cardIdx);
+            el.onclick = () => triggerCardEffect(cardIdx);
             container.appendChild(el);
         });
     }
 
-    function selectCardToPlay(cardIdx) {
-        const myPlayerIndex = gameState.players.findIndex(p => p.id === myId);
-        
-        if (isHost) {
-            processPlayerAction(myPlayerIndex, cardIdx);
+    // Handle Card Effects & Targeting Modals before ending turn
+    function triggerCardEffect(cardIdx) {
+        const myPlayer = gameState.players.find(p => p.id === myId);
+        const card = myPlayer.hand[cardIdx];
+
+        if (card.value === 6) {
+            // L: Inspect another player's hand
+            openTargetModal("L / Lawliet: Inspect another player's hand", (targetIdx) => {
+                const target = gameState.players[targetIdx];
+                const revealed = target.hand[0] ? `${target.hand[0].name} (Value ${target.hand[0].value})` : "Unknown";
+                alert(`${target.name}'s hidden card is: ${revealed}`);
+                logEvent(`${myPlayer.name} inspected ${target.name}'s card.`);
+                completeCardPlay(cardIdx);
+            });
+        } else if (card.value === 5) {
+            // Soichiro: Compare hands
+            openTargetModal("Soichiro Yagami: Compare hands with another player", (targetIdx) => {
+                const target = gameState.players[targetIdx];
+                // Find remaining card index (the one not being played)
+                const myCardVal = myPlayer.hand.find((_, i) => i !== cardIdx).value;
+                const targetVal = target.hand[0] ? target.hand[0].value : 0;
+
+                alert(`${target.name}'s card value is [${targetVal}]. Your remaining card value is [${myCardVal}].`);
+                if (myCardVal < targetVal) {
+                    myPlayer.isEliminated = true;
+                    logEvent(`${myPlayer.name} eliminated in Soichiro comparison against ${target.name}.`);
+                } else if (targetVal < myCardVal) {
+                    target.isEliminated = true;
+                    logEvent(`${target.name} eliminated in Soichiro comparison against ${myPlayer.name}.`);
+                } else {
+                    logEvent(`Soichiro comparison tied between ${myPlayer.name} and ${target.name}.`);
+                }
+                completeCardPlay(cardIdx);
+            });
+        } else if (card.value === 3) {
+            // Investigator: Guess card value 1-7
+            openInvestigatorModal((targetIdx, guessVal) => {
+                const target = gameState.players[targetIdx];
+                const targetVal = target.hand[0] ? target.hand[0].value : -1;
+                if (targetVal === guessVal) {
+                    alert(`Correct! ${target.name} held value ${guessVal} and is eliminated.`);
+                    target.isEliminated = true;
+                    logEvent(`${myPlayer.name} correctly guessed ${target.name}'s card with Investigator.`);
+                } else {
+                    alert(`Incorrect guess.`);
+                    logEvent(`${myPlayer.name} guessed incorrectly with Investigator.`);
+                }
+                completeCardPlay(cardIdx);
+            });
+        } else if (card.value === 1) {
+            // Anonymous Informant: Name value 1-8
+            openInformantModal((targetIdx, namedVal) => {
+                const target = gameState.players[targetIdx];
+                const targetVal = target.hand[0] ? target.hand[0].value : -1;
+                if (targetVal === namedVal) {
+                    alert(`Correct! ${target.name} held value ${namedVal} and is eliminated.`);
+                    target.isEliminated = true;
+                    logEvent(`${myPlayer.name} exposed ${target.name} using Informant.`);
+                } else {
+                    alert(`Incorrect tip.`);
+                }
+                completeCardPlay(cardIdx);
+            });
         } else {
-            hostConnection.send({ type: 'ACTION_PLAY_CARD', playerIndex: myPlayerIndex, cardIndex: cardIdx });
+            // For cards like Kira (8), Misa (7), Rem (4), Matsuda (2) or vanilla effects
+            logEvent(`${myPlayer.name} played [Value ${card.value}] ${card.name}`);
+            completeCardPlay(cardIdx);
         }
     }
 
-    function processPlayerAction(playerIndex, cardIdx) {
-        const player = gameState.players[playerIndex];
-        const playedCard = player.hand.splice(cardIdx, 1)[0];
-        logEvent(`${player.name} played [Value ${playedCard.value}] ${playedCard.name}`);
+    function openTargetModal(title, callback) {
+        document.getElementById("action-modal").classList.remove("hidden");
+        document.getElementById("modal-title").innerText = title;
+        const body = document.getElementById("modal-body");
+        
+        let html = `Select Player: <select id="modal-target-select">`;
+        gameState.players.forEach((p, idx) => {
+            if (!p.isEliminated && p.id !== myId) {
+                html += `<option value="${idx}">${p.name}</option>`;
+            }
+        });
+        html += `</select>`;
+        body.innerHTML = html;
+
+        document.getElementById("modal-confirm-btn").onclick = () => {
+            const val = parseInt(document.getElementById("modal-target-select").value);
+            document.getElementById("action-modal").classList.add("hidden");
+            callback(val);
+        };
+    }
+
+    function openInvestigatorModal(callback) {
+        document.getElementById("action-modal").classList.remove("hidden");
+        document.getElementById("modal-title").innerText = "Task Force Investigator: Guess Card";
+        const body = document.getElementById("modal-body");
+        
+        let html = `Target Player: <select id="inv-target">`;
+        gameState.players.forEach((p, idx) => {
+            if (!p.isEliminated && p.id !== myId) html += `<option value="${idx}">${p.name}</option>`;
+        });
+        html += `</select><br><br>Guess Value (1-7): <select id="inv-val">`;
+        for(let i=1; i<=7; i++) html += `<option value="${i}">${i}</option>`;
+        html += `</select>`;
+        body.innerHTML = html;
+
+        document.getElementById("modal-confirm-btn").onclick = () => {
+            const tIdx = parseInt(document.getElementById("inv-target").value);
+            const guessVal = parseInt(document.getElementById("inv-val").value);
+            document.getElementById("action-modal").classList.add("hidden");
+            callback(tIdx, guessVal);
+        };
+    }
+
+    function openInformantModal(callback) {
+        document.getElementById("action-modal").classList.remove("hidden");
+        document.getElementById("modal-title").innerText = "Anonymous Informant";
+        const body = document.getElementById("modal-body");
+        
+        let html = `Target Player: <select id="inf-target">`;
+        gameState.players.forEach((p, idx) => {
+            if (!p.isEliminated && p.id !== myId) html += `<option value="${idx}">${p.name}</option>`;
+        });
+        html += `</select><br><br>Name Value (1-8): <select id="inf-val">`;
+        for(let i=1; i<=8; i++) html += `<option value="${i}">${i}</option>`;
+        html += `</select>`;
+        body.innerHTML = html;
+
+        document.getElementById("modal-confirm-btn").onclick = () => {
+            const tIdx = parseInt(document.getElementById("inf-target").value);
+            const namedVal = parseInt(document.getElementById("inf-val").value);
+            document.getElementById("action-modal").classList.add("hidden");
+            callback(tIdx, namedVal);
+        };
+    }
+
+    function completeCardPlay(cardIdx) {
+        const myPlayer = gameState.players.find(p => p.id === myId);
+        myPlayer.hand.splice(cardIdx, 1); // Discard played card
 
         // Advance to next live player
         do {
